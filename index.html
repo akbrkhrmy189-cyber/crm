@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#1f5f5b">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg">
+<title>مدیریت مشتریان</title>
+<style>
+:root{--bg:#f4f6f5;--card:#fff;--ink:#1b2a29;--mut:#6b7c7a;--pri:#1f5f5b;--line:#dce4e2;--warn:#c2410c;--sel:#e6f0ee}
+@media(prefers-color-scheme:dark){:root{--bg:#111a19;--card:#1a2625;--ink:#e6efed;--mut:#93a5a2;--pri:#4fb3ab;--line:#2b3b39;--warn:#fb923c;--sel:#223532}}
+*{box-sizing:border-box}
+body{margin:0;font-family:Vazirmatn,Tahoma,"Noto Naskh Arabic",sans-serif;background:var(--bg);color:var(--ink)}
+header{background:var(--pri);color:#fff;padding:12px 14px;font-size:18px;font-weight:700;position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:12px}
+header #mb{background:none;padding:4px 8px;font-size:24px;line-height:1}
+main{padding:12px;max-width:640px;margin:auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px;margin-bottom:10px}
+.row{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.mut{color:var(--mut);font-size:13px}
+input,select,textarea,button{font:inherit;color:inherit}
+input,select,textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);margin-bottom:8px}
+button{border:0;border-radius:8px;padding:10px 14px;background:var(--pri);color:#fff;cursor:pointer}
+button.ghost{background:transparent;color:var(--pri);border:1px solid var(--pri)}
+button.del{background:transparent;color:var(--warn);padding:4px 8px}
+.tag{font-size:12px;padding:2px 8px;border-radius:99px;border:1px solid var(--line)}
+.late{color:var(--warn);font-weight:700}
+.done{text-decoration:line-through;opacity:.6}
+#ov{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9;display:none}
+#dr{position:fixed;top:0;bottom:0;inset-inline-start:0;width:78%;max-width:320px;background:var(--card);z-index:10;transform:translateX(100%);transition:transform .2s;display:flex;flex-direction:column}
+body.open #dr{transform:none}body.open #ov{display:block}
+#dr .top{padding:18px 16px;border-bottom:1px solid var(--line)}
+#dr .top b{font-size:18px;display:block}
+#dr button.it{display:block;width:100%;text-align:start;background:none;color:var(--ink);border-radius:0;border-bottom:1px solid var(--line);padding:16px}
+#dr button.it.on{background:var(--sel);color:var(--pri);font-weight:700}
+.big{font-size:22px;font-weight:700}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+</style>
+</head>
+<body>
+<header><button id="mb" aria-label="منو">☰</button><span id="title"></span></header>
+<div id="ov"></div>
+<aside id="dr"><div class="top"><b>مدیریت مشتریان</b><span class="mut">مشتری، ویزیت و فاکتور</span></div><div id="menu"></div></aside>
+<main id="app"></main>
+<script>
+const STATUS=["سرنخ جدید","در حال مذاکره","مشتری","از دست رفته"];
+const PAGES=[["follow","پیگیری روزانه"],["reports","گزارشات"],["contacts","تماس‌گیرنده‌ها"],["visits","ویزیت‌ها"],["invoices","فاکتورها"],["items","کالاها و تعرفه"],["settings","تنظیمات"]];
+let db;try{db=JSON.parse(localStorage.getItem("crm"))}catch(e){}
+db=db||{};["customers","tasks","visits","invoices","items"].forEach(k=>db[k]=db[k]||[]);
+const save=()=>{try{localStorage.setItem("crm",JSON.stringify(db))}catch(e){alert("ذخیره‌سازی ممکن نیست")}};
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const fa=d=>new Date(d).toLocaleDateString("fa-IR");
+const today=()=>new Date().toISOString().slice(0,10);
+const T=n=>Number(n).toLocaleString("fa-IR")+" تومان";
+const cname=id=>db.customers.find(c=>c.id===id)?.name||"—";
+const copts=sel=>db.customers.map(c=>`<option value="${c.id}" ${c.id===sel?"selected":""}>${esc(c.name)}</option>`).join("");
+const invTotal=i=>i.lines.reduce((a,l)=>a+l.q*l.p,0);
+let page="follow",openId=null,q="",filter="",draft=null;
+const $=s=>document.querySelector(s),app=$("#app");
+
+$("#mb").onclick=()=>document.body.classList.add("open");
+$("#ov").onclick=()=>document.body.classList.remove("open");
+$("#menu").innerHTML=PAGES.map(p=>`<button class="it" data-p="${p[0]}">${p[1]}</button>`).join("");
+document.querySelectorAll("#menu .it").forEach(b=>b.onclick=()=>go(b.dataset.p));
+function go(p){page=p;openId=null;draft=null;document.body.classList.remove("open");render()}
+function render(){
+  $("#title").textContent=PAGES.find(p=>p[0]===page)[1];
+  document.querySelectorAll("#menu .it").forEach(b=>b.classList.toggle("on",b.dataset.p===page));
+  ({follow,reports,contacts,visits,invoices,items,settings})[page]();
+  window.scrollTo(0,0);
+}
+const need=()=>{if(!db.customers.length){alert("ابتدا یک مشتری در «تماس‌گیرنده‌ها» ثبت کنید");return true}};
+
+/* ---------- پیگیری روزانه ---------- */
+function follow(){
+  const t=today(),open=db.tasks.filter(x=>!x.done).sort((a,b)=>a.date.localeCompare(b.date));
+  const due=open.filter(x=>x.date<=t),later=open.filter(x=>x.date>t);
+  const row=x=>`<div class="card row"><div><div>${esc(x.title)}</div><div class="mut">${esc(cname(x.cid))} · <span class="${x.date<t?"late":""}">${fa(x.date)}${x.date<t?" (گذشته)":""}</span></div></div>
+   <div><button data-d="${x.id}">انجام شد</button><button class="del" data-x="${x.id}">حذف</button></div></div>`;
+  app.innerHTML=`<div class="card"><b>پیگیری جدید</b><select id="tc">${copts()}</select><input id="tt" placeholder="کار"><input id="td" type="date" value="${t}"><button id="ta">افزودن</button></div>
+  <h4>امروز و عقب‌افتاده</h4>${due.map(row).join("")||'<p class="mut">پیگیری فوری ندارید.</p>'}
+  <h4>بعداً</h4>${later.map(row).join("")||'<p class="mut">—</p>'}`;
+  $("#ta").onclick=()=>{if(need())return;const title=$("#tt").value.trim();if(!title)return;db.tasks.push({id:uid(),cid:$("#tc").value,title,date:$("#td").value||t,done:false});save();follow()};
+  app.querySelectorAll("[data-d]").forEach(b=>b.onclick=()=>{db.tasks.find(x=>x.id===b.dataset.d).done=true;save();follow()});
+  app.querySelectorAll("[data-x]").forEach(b=>b.onclick=()=>{db.tasks=db.tasks.filter(x=>x.id!==b.dataset.x);save();follow()});
+}
+
+/* ---------- گزارشات ---------- */
+function reports(){
+  const tot=db.invoices.reduce((a,i)=>a+invTotal(i),0),paid=db.invoices.filter(i=>i.paid).reduce((a,i)=>a+invTotal(i),0);
+  const m=today().slice(0,7),vm=db.visits.filter(v=>v.date.startsWith(m)).length;
+  app.innerHTML=`<div class="grid">
+   <div class="card"><div class="mut">مشتریان</div><div class="big">${db.customers.length.toLocaleString("fa-IR")}</div></div>
+   <div class="card"><div class="mut">ویزیت این ماه</div><div class="big">${vm.toLocaleString("fa-IR")}</div></div>
+   <div class="card"><div class="mut">جمع فاکتورها</div><div class="big">${T(tot)}</div></div>
+   <div class="card"><div class="mut">وصول‌نشده</div><div class="big late">${T(tot-paid)}</div></div></div>
+   <div class="card"><b>مشتریان بر اساس وضعیت</b>${STATUS.map(s=>`<div class="row"><span>${s}</span><b>${db.customers.filter(c=>c.status===s).length.toLocaleString("fa-IR")}</b></div>`).join("")}</div>`;
+}
+
+/* ---------- تماس‌گیرنده‌ها ---------- */
+function contacts(){
+  if(openId==="new")return form();
+  if(openId)return detail();
+  const items=db.customers.filter(c=>(!filter||c.status===filter)&&(c.name+c.phone+c.company).includes(q));
+  app.innerHTML=`<div class="card"><input id="q" placeholder="جستجوی نام، شماره یا شرکت" value="${esc(q)}">
+   <select id="f"><option value="">همه وضعیت‌ها</option>${STATUS.map(s=>`<option ${s===filter?"selected":""}>${s}</option>`).join("")}</select>
+   <button id="add" style="width:100%">+ مشتری جدید</button></div>
+   ${items.map(c=>`<div class="card" data-id="${c.id}"><div class="row"><b>${esc(c.name)}</b><span class="tag">${esc(c.status)}</span></div><div class="mut">${esc(c.company)} ${c.phone?"· "+esc(c.phone):""}</div></div>`).join("")||'<p class="mut">هنوز مشتری‌ای ثبت نشده.</p>'}`;
+  $("#q").oninput=e=>{q=e.target.value;contacts();const i=$("#q");i.focus();i.setSelectionRange(q.length,q.length)};
+  $("#f").onchange=e=>{filter=e.target.value;contacts()};
+  $("#add").onclick=()=>{openId="new";contacts()};
+  app.querySelectorAll("[data-id]").forEach(el=>el.onclick=()=>{openId=el.dataset.id;contacts()});
+}
+function form(c={}){
+  app.innerHTML=`<div class="card"><input id="n" placeholder="نام" value="${esc(c.name)}"><input id="p" type="tel" placeholder="شماره تماس" value="${esc(c.phone)}"><input id="co" placeholder="شرکت / توضیح" value="${esc(c.company)}">
+  <select id="s">${STATUS.map(s=>`<option ${s===c.status?"selected":""}>${s}</option>`).join("")}</select>
+  <div class="row"><button id="ok">ذخیره</button><button class="ghost" id="no">انصراف</button></div></div>`;
+  $("#no").onclick=()=>{openId=c.id||null;contacts()};
+  $("#ok").onclick=()=>{const name=$("#n").value.trim();if(!name)return alert("نام را وارد کنید");
+    const v={name,phone:$("#p").value.trim(),company:$("#co").value.trim(),status:$("#s").value};
+    if(c.id)Object.assign(c,v);else{c={id:uid(),log:[],...v};db.customers.unshift(c)}
+    save();openId=c.id;contacts()};
+}
+function detail(){
+  const c=db.customers.find(x=>x.id===openId);if(!c){openId=null;return contacts()}
+  const inv=db.invoices.filter(i=>i.cid===c.id);
+  app.innerHTML=`<button class="ghost" id="back">بازگشت</button>
+  <div class="card" style="margin-top:10px"><div class="row"><b>${esc(c.name)}</b><span class="tag">${esc(c.status)}</span></div><div class="mut">${esc(c.company)}</div>
+  ${c.phone?`<p><a href="tel:${esc(c.phone)}">تماس: ${esc(c.phone)}</a></p>`:""}
+  <div class="row"><button class="ghost" id="ed">ویرایش</button><button class="del" id="rm">حذف مشتری</button></div></div>
+  <div class="card"><b>ثبت یادداشت / تماس</b><textarea id="note" rows="2" placeholder="چه شد؟"></textarea><button id="addn">افزودن</button>
+  ${(c.log||[]).map(l=>`<p><span class="mut">${fa(l.d)}</span><br>${esc(l.t)}</p>`).join("")}</div>
+  <div class="card"><b>فاکتورها</b>${inv.map(i=>`<p>${fa(i.date)} · ${T(invTotal(i))} · ${i.paid?"پرداخت‌شده":"<span class='late'>پرداخت‌نشده</span>"}</p>`).join("")||'<p class="mut">—</p>'}</div>`;
+  $("#back").onclick=()=>{openId=null;contacts()};
+  $("#ed").onclick=()=>form(c);
+  $("#rm").onclick=()=>{if(confirm("این مشتری و پیگیری‌هایش حذف شود؟")){db.customers=db.customers.filter(x=>x!==c);db.tasks=db.tasks.filter(t=>t.cid!==c.id);save();openId=null;contacts()}};
+  $("#addn").onclick=()=>{const t=$("#note").value.trim();if(!t)return;c.log.unshift({d:Date.now(),t});save();detail()};
+}
+
+/* ---------- ویزیت‌ها ---------- */
+function visits(){
+  const vs=[...db.visits].sort((a,b)=>b.date.localeCompare(a.date));
+  app.innerHTML=`<div class="card"><b>ویزیت جدید</b><select id="vc">${copts()}</select><input id="vd" type="date" value="${today()}"><textarea id="vn" rows="2" placeholder="توضیحات ویزیت"></textarea><button id="va">ثبت ویزیت</button></div>
+  ${vs.map(v=>`<div class="card row"><div><b>${esc(cname(v.cid))}</b> <span class="mut">${fa(v.date)}</span><div>${esc(v.note)}</div></div><button class="del" data-x="${v.id}">حذف</button></div>`).join("")||'<p class="mut">ویزیتی ثبت نشده.</p>'}`;
+  $("#va").onclick=()=>{if(need())return;db.visits.push({id:uid(),cid:$("#vc").value,date:$("#vd").value||today(),note:$("#vn").value.trim()});save();visits()};
+  app.querySelectorAll("[data-x]").forEach(b=>b.onclick=()=>{db.visits=db.visits.filter(x=>x.id!==b.dataset.x);save();visits()});
+}
+
+/* ---------- فاکتورها ---------- */
+function invoices(){
+  if(draft)return invForm();
+  const L=[...db.invoices].sort((a,b)=>b.date.localeCompare(a.date));
+  app.innerHTML=`<button id="nw" style="width:100%;margin-bottom:10px">+ فاکتور جدید</button>
+  ${L.map(i=>`<div class="card"><div class="row"><b>${esc(cname(i.cid))}</b><span class="mut">${fa(i.date)}</span></div>
+  ${i.lines.map(l=>`<div class="row mut"><span>${esc(l.t)} × ${l.q.toLocaleString("fa-IR")}</span><span>${T(l.q*l.p)}</span></div>`).join("")}
+  <div class="row"><b>${T(invTotal(i))}</b><span><button data-p="${i.id}" class="${i.paid?"ghost":""}">${i.paid?"پرداخت‌شده":"ثبت پرداخت"}</button><button class="del" data-x="${i.id}">حذف</button></span></div></div>`).join("")||'<p class="mut">فاکتوری ثبت نشده.</p>'}`;
+  $("#nw").onclick=()=>{if(need())return;draft={cid:db.customers[0].id,lines:[{t:"",q:1,p:0}]};invoices()};
+  app.querySelectorAll("[data-p]").forEach(b=>b.onclick=()=>{const i=db.invoices.find(x=>x.id===b.dataset.p);i.paid=!i.paid;save();invoices()});
+  app.querySelectorAll("[data-x]").forEach(b=>b.onclick=()=>{if(confirm("فاکتور حذف شود؟")){db.invoices=db.invoices.filter(x=>x.id!==b.dataset.x);save();invoices()}});
+}
+function readDraft(){draft.cid=$("#ic").value;draft.lines=[...document.querySelectorAll(".ln")].map(r=>({t:r.querySelector(".lt").value,q:+r.querySelector(".lq").value||0,p:+r.querySelector(".lp").value||0}))}
+function invForm(){
+  app.innerHTML=`<div class="card"><b>فاکتور جدید</b><select id="ic">${copts(draft.cid)}</select>
+  <datalist id="dl">${db.items.map(i=>`<option value="${esc(i.name)}">`).join("")}</datalist>
+  ${draft.lines.map(l=>`<div class="ln"><input class="lt" list="dl" placeholder="شرح" value="${esc(l.t)}"><div class="grid"><input class="lq" type="number" min="0" placeholder="تعداد" value="${l.q}"><input class="lp" type="number" min="0" placeholder="قیمت واحد (تومان)" value="${l.p}"></div></div>`).join("")}
+  <button class="ghost" id="al">+ ردیف</button><p class="big" id="tt"></p>
+  <div class="row"><button id="ok">ذخیره فاکتور</button><button class="ghost" id="no">انصراف</button></div></div>`;
+  const tot=()=>{readDraft();$("#tt").textContent=T(draft.lines.reduce((a,l)=>a+l.q*l.p,0))};
+  app.querySelectorAll(".lt").forEach(i=>i.onchange=()=>{const it=db.items.find(x=>x.name===i.value);if(it){i.closest(".ln").querySelector(".lp").value=it.price}tot()});
+  app.querySelectorAll("input,select").forEach(i=>i.oninput=tot);tot();
+  $("#al").onclick=()=>{readDraft();draft.lines.push({t:"",q:1,p:0});invForm()};
+  $("#no").onclick=()=>{draft=null;invoices()};
+  $("#ok").onclick=()=>{readDraft();const ls=draft.lines.filter(l=>l.t.trim()&&l.q>0);if(!ls.length)return alert("حداقل یک ردیف کامل وارد کنید");
+    db.invoices.push({id:uid(),cid:draft.cid,date:today(),lines:ls,paid:false});save();draft=null;invoices()};
+}
+
+/* ---------- کالاها و تعرفه ---------- */
+const TIERS=[[14,300000],[12,350000],[10,400000],[8,450000],[6,500000],[4,550000],[2,600000],[1,700000]];
+const WISDOM=[["عقل پایین (نوع اول)",800000,3000000],["عقل پایین (نوع دوم)",800000,2000000]];
+const ROOT=[50000,200000];
+function items(){
+  app.innerHTML=`<div class="card"><b>کالا / خدمت جدید</b><input id="in" placeholder="نام"><input id="ip" type="number" min="0" placeholder="قیمت (تومان)"><button id="ia">افزودن</button>
+  ${db.items.map(i=>`<div class="row" style="margin-top:8px"><span>${esc(i.name)} · ${T(i.price)}</span><button class="del" data-x="${i.id}">حذف</button></div>`).join("")}</div>
+  <div class="card"><b>محاسبه تعرفه دندانپزشکی</b>
+  <p class="mut">تعداد دندان</p><select id="tc"><option value="0">انتخاب نشده</option>${TIERS.map(t=>`<option value="${t[0]}">${t[0].toLocaleString("fa-IR")} عدد (هر دندان ${T(t[1])})</option>`).join("")}</select>
+  <p class="mut">دندان نیازمند ریشه (هر کدام ${T(ROOT[0])} تا ${T(ROOT[1])})</p><input id="rc" type="number" min="0" value="0">
+  ${WISDOM.map((w,i)=>`<p class="mut">${w[0]}: ${T(w[1])} تا ${T(w[2])}</p><input class="wc" data-i="${i}" type="number" min="0" value="0">`).join("")}
+  <div class="card" style="background:var(--bg)"><div id="out"></div></div><button id="mk">ساخت فاکتور از این محاسبه</button></div>`;
+  $("#ia").onclick=()=>{const name=$("#in").value.trim();if(!name)return;db.items.push({id:uid(),name,price:+$("#ip").value||0});save();items()};
+  app.querySelectorAll("[data-x]").forEach(b=>b.onclick=()=>{db.items=db.items.filter(x=>x.id!==b.dataset.x);save();items()});
+  const calc=()=>{const n=+$("#tc").value,u=(TIERS.find(t=>t[0]===n)||[0,0])[1];const r=Math.max(0,+$("#rc").value||0);
+    let lo=n*u+r*ROOT[0],hi=n*u+r*ROOT[1];
+    document.querySelectorAll(".wc").forEach(i=>{const c=Math.max(0,+i.value||0),w=WISDOM[i.dataset.i];lo+=c*w[1];hi+=c*w[2]});
+    $("#out").innerHTML=lo===hi?`<b>${T(lo)}</b>`:`<b>${T(lo)}</b> تا <b>${T(hi)}</b>`};
+  app.querySelectorAll("#tc,#rc,.wc").forEach(e=>e.oninput=calc);calc();
+  $("#mk").onclick=()=>{if(need())return;const n=+$("#tc").value,u=(TIERS.find(t=>t[0]===n)||[0,0])[1],r=+$("#rc").value||0,L=[];
+    if(n)L.push({t:"دندان",q:n,p:u});if(r>0)L.push({t:"هزینه ریشه",q:r,p:ROOT[0]});
+    document.querySelectorAll(".wc").forEach(i=>{const c=+i.value||0;if(c>0){const w=WISDOM[i.dataset.i];L.push({t:w[0],q:c,p:w[1]})}});
+    if(!L.length)return alert("ابتدا موارد را انتخاب کنید");
+    draft={cid:db.customers[0].id,lines:L};page="invoices";render()};
+}
+
+/* ---------- تنظیمات ---------- */
+function settings(){
+  app.innerHTML=`<div class="card"><p>${db.customers.length.toLocaleString("fa-IR")} مشتری، ${db.invoices.length.toLocaleString("fa-IR")} فاکتور و ${db.visits.length.toLocaleString("fa-IR")} ویزیت ذخیره شده است.</p>
+  <button id="ex">دریافت نسخه پشتیبان</button><p></p><input type="file" id="im" accept="application/json"></div>
+  <p class="mut">داده‌ها فقط روی همین دستگاه ذخیره می‌شوند. برای ایمنی یا انتقال به گوشی دیگر، پشتیبان بگیرید.</p>`;
+  $("#ex").onclick=()=>{const a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(db)],{type:"application/json"}));a.download="crm-backup.json";a.click()};
+  $("#im").onchange=async e=>{try{const d=JSON.parse(await e.target.files[0].text());if(!Array.isArray(d.customers))throw 0;
+    ["tasks","visits","invoices","items"].forEach(k=>d[k]=d[k]||[]);db=d;save();alert("بازیابی شد");settings()}catch{alert("فایل معتبر نیست")}};
+}
+render();
+if("serviceWorker"in navigator)navigator.serviceWorker.register("sw.js").catch(()=>{});
+</script>
+</body>
+</html>
